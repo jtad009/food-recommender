@@ -8,3 +8,4 @@ pandas==2.1.1
 fake-useragent==1.4.0
 pymongo==4.3.3
 webdriver-manager==4.0.1
+python-dotenv>=1.0.0

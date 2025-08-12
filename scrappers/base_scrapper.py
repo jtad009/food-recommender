@@ -61,7 +61,6 @@ class RecipeDoc:
     def make(url: str) -> "RecipeDoc":
         host = urlparse(url).netloc
         RecipeDocs = RecipeDoc(url=url, source=host, scraped_at=datetime.utcnow())
-        print(RecipeDocs)
         return RecipeDocs
 
     def finalize(self):

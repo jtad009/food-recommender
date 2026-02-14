@@ -2,6 +2,7 @@ import re
 from typing import Iterable, Optional
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
+from embedder.hugging_face_embedder import HFEmbedder
 from scrappers.base_scrapper import BaseRecipeScraper, RecipeDoc, clean, get_meta_image
 
 class YummyMedleyScraper(BaseRecipeScraper):

@@ -7,6 +7,8 @@ from datetime import datetime
 
 import requests
 from bs4 import BeautifulSoup, Tag, NavigableString
+from embedder.base_encoder import BaseEncoder
+from embedder.hugging_face_embedder import HFEmbedder
 from pymongo import MongoClient, errors
 from pymongo.operations import UpdateOne
 
@@ -78,7 +80,7 @@ class RecipeDoc:
 # ---------------------------
 
 class SoupClient:
-    def __init__(self, base_domain: str, user_agent: str = None):
+    def __init__(self, base_domain: str, user_agent: str = None, embedder= None):
         self.base_domain = base_domain
         self.base_url = f"https://{base_domain}"
         self.session = requests.Session()
@@ -228,6 +230,22 @@ class DualSink:
 class BaseRecipeScraper(SoupClient):
     HEADING_TAGS = ("h1","h2","h3","h4","h5","h6")
 
+    def __init__(
+        self,
+        *args,
+        embedder: "BaseEncoder | None" = None,
+        embedding_fields= None,
+        **kwargs
+    ):
+        """
+        embedder: HFEmbedder(), optional
+        embedding_fields: list of (source_field, target_field) like:
+            [("title", "title_emb"), ("instructions_text", "instr_emb")]
+        """
+        super().__init__(*args, **kwargs)
+        self.embedder = embedder
+        self.embedding_fields = embedding_fields or []
+
     def extract_jsonld(self, soup: BeautifulSoup) -> Optional[Dict[str, Any]]:
         def to_list(x): return x if isinstance(x, list) else [x]
         for tag in soup.find_all("script", type="application/ld+json"):
@@ -304,17 +322,59 @@ class BaseRecipeScraper(SoupClient):
                         rf.write(url + "\n")
 
                 if len(batch) >= batch_size:
+                    self._apply_embeddings(batch)
                     sink.write_many(batch); saved += len(batch); batch = []
                 if i % 25 == 0:
                     self.log.info(f"…processed {i}, saved {saved}")
                 time.sleep(delay)
 
             if batch:
+                self._apply_embeddings(batch)
                 sink.write_many(batch); saved += len(batch)
         finally:
             sink.close()
         self.log.info(f"[done] saved {saved}")
         return saved
 
+    def _apply_embeddings(self, batch: List[Dict[str, Any]]) -> None:
+        """
+        Applies embeddings to specified fields in a batch of documents.
+
+        For each (source_field, destination_field) pair in `self.embedding_fields`, this method:
+        - Extracts the value from `source_field` in each document of the batch.
+        - Converts the value to a string. If the value is a list, joins its elements with newlines.
+        - Handles `None` values by converting them to empty strings.
+        - Uses `self.embedder.encode` to generate embeddings for the processed texts.
+        - Stores the resulting embedding vector in `destination_field` of each document.
+
+        If `self.embedder`, `self.embedding_fields`, or `batch` is not set or empty, the method returns immediately.
+
+        Args:
+            batch (List[Dict[str, Any]]): A list of documents to process, where each document is a dictionary.
+
+        Returns:
+            None
+        """
+        if not self.embedder or not self.embedding_fields or not batch:
+            return
+
+        for src_field, dst_field in self.embedding_fields:
+            # Gather texts; coerce to strings.
+            texts: List[str] = []
+            for doc in batch:
+                val = doc.get(src_field)
+                if isinstance(val, list):
+                    # sensible default for ingredients/instructions: join with newline
+                    joined = "\n".join(str(x) for x in val)
+                    texts.append(joined)
+                elif val is None:
+                    texts.append("")
+                else:
+                    texts.append(str(val))
+
+            embs = self.embedder.encode(texts)
+            # Write back
+            for document, vec in zip(batch, embs):
+                document[dst_field] = vec
 
 
